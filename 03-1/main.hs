@@ -2,95 +2,120 @@ import System.Environment
 import System.IO
 import Text.Read
 import Data.List.Split
+import Data.Maybe (catMaybes)
 
-data Direction = North Int | South Int | West Int | East Int deriving Show
+-- A convenience function that is similar to a map,
+-- but with an accumulator that can be used to 
+-- aggregate values based on previous items in the list
+mapAccum :: (a -> b -> a) -> a -> [b] -> [a]
+mapAccum _ _ [] = []
+mapAccum f accum (x:xs) = 
+    let newAccum = f accum x in
+        newAccum : mapAccum f newAccum xs
 
-data Bounds = Bounds {
-    left :: Int,
-    bottom :: Int,
-    right :: Int,
-    top  :: Int 
-} deriving Show
+-- a convenience function to return the smallest
+-- item in a list
+minElement :: [Int] -> Int
+minElement [] = 0
+minElement [x] = x
+minElement (x:y:xs)
+    | x > y = minElement (y:xs)
+    | x < y = minElement (x:xs)
+    | x == y = minElement (x:xs)
 
-initBounds = Bounds {
-    left = 0,
-    bottom = 0,
-    right = 0,
-    top = 0
-}
-
-data Coordinates = Coordinates {
+data Coordinate = Coordinate {
     x :: Int,
     y :: Int
 } deriving Show
 
-initCoordinates = Coordinates {
+type Line = (Coordinate, Coordinate)
+
+-- convenience function. Can make it easier to compare lines
+reverseLine :: Line -> Line
+reverseLine (c1, c2) = (c2, c1)
+
+-- Coordinate Addition
+addC :: Coordinate -> Coordinate -> Coordinate
+addC (Coordinate x1 y1) (Coordinate x2 y2) = Coordinate (x1 + x2) (y1 + y2)
+
+-- Coordinate Scalar Multiplication
+sMult :: Int -> Coordinate -> Coordinate
+sMult s (Coordinate x y) = Coordinate (s*x) (s*y) 
+
+initCoordinate = Coordinate {
     x = 0,
     y = 0
 }
 
-type Line = (Coordinate, Coordinate)
+-- a convenience function to parse the codes of the program
+-- to a series of vectors that can be more easily added
+codeToVector :: String -> Coordinate
+codeToVector (dir:int) = 
+    let coords = (dir, read int :: Int) in
+        case coords of
+            ('L', amount) -> Coordinate (-amount) 0
+            ('R', amount) -> Coordinate amount 0
+            ('D', amount) -> Coordinate 0 (-amount)
+            ('U', amount) -> Coordinate 0 amount
 
-updateBounds :: Bounds -> Coordinates -> Direction -> Bounds
-updateBounds b@(Bounds { left=left }) (Coordinates { x=curX }) (West x)
-    | netX < left = b { left=netX }
-    | otherwise = b
-    where netX = curX-x
-updateBounds b@(Bounds { right=right }) (Coordinates { x=curX }) (East x)
-    | netX > right = b { right=netX }
-    | otherwise = b
-    where netX = curX + x
-updateBounds b@(Bounds { bottom=bottom }) (Coordinates { y=curY }) (South y)
-    | netY < bottom = b { bottom=netY }
-    | otherwise = b
-    where netY = curY - y
-updateBounds b@(Bounds { top=top }) (Coordinates { y=curY }) (North y)
-    | netY > top = b { top=netY }
-    | otherwise = b
-    where netY = curY + y
+-- given a list of coordinates, convert that into a 
+-- series of coordinates
+directionsToCoordinates :: [String] -> [Coordinate]
+directionsToCoordinates directions = 
+    mapAccum (\cur dir -> move cur dir) initCoordinate directions
+    where
+        move cur dir = addC cur (codeToVector dir)
 
-updateCoordinates :: Coordinates -> Direction -> Coordinates
-updateCoordinates coordinates@(Coordinates { x=curX }) (West x) =
-    coordinates { x=(curX - x) }
-updateCoordinates coordinates@(Coordinates { x=curX }) (East x) =
-    coordinates { x=(curX + x) }
-updateCoordinates coordinates@(Coordinates { y=curY }) (South y) =
-    coordinates { y=(curY - y) }
-updateCoordinates coordinates@(Coordinates { y=curY }) (North y) =
-    coordinates { y=(curY + y) }
+-- given a list of coordinates, make a list of
+-- sequential segments
+coordinatesToSegments :: [Coordinate] -> [Line]
+coordinatesToSegments start@(_:offset) = 
+    zip start offset
 
--- Given a series of directions, determine the bounds
--- of the field
-getBounds ::  [Direction] -> Bounds
-getBounds directions = bounds
-    where 
-        acc = (initCoordinates, initBounds)
-        update (coords, bounds) direction =
-            (updateCoordinates coords direction, updateBounds bounds coords direction)
-        (_, bounds) = foldl update acc directions
+-- a convenience function. Given 2 lines, determine if the
+-- first line vertically overlaps the other
+getVOverlap :: Line -> Line -> Maybe Int
+getVOverlap l1 l2
+    | y11 == y12 && ((y21 <= y11 && y22 >= y11) || (y21 >= y11 && y22 <= y11)) = Just y11
+    | y21 == y22 && ((y11 <= y21 && y12 >= y21) || (y11 >= y21 && y12 <= y22)) = Just y21
+    | otherwise = Nothing
+    where
+        ((Coordinate _ y11), (Coordinate _ y12)) = l1
+        ((Coordinate _ y21), (Coordinate _ y22)) = l2
 
--- Convenience function to print the bounds
-printBounds :: Bounds -> String
-printBounds (Bounds { left=left, bottom=bottom, top=top, right=right }) = 
-    unlines $ take (top - bottom) $ repeat writeRow
-    where writeRow = take (right - left) $ repeat '.'
+getHOverlap :: Line -> Line -> Maybe Int
+getHOverlap l1 l2
+    | x11 == x12 && ((x21 <= x11 && x22 >= x11) || (x21 >= x11 && x22 <= x11)) = Just x11
+    | x21 == x22 && ((x11 <= x21 && x12 >= x21) || (x11 >= x21 && x12 <= x22)) = Just x21
+    | otherwise = Nothing
+    where
+        ((Coordinate x11 _), (Coordinate x12 _)) = l1
+        ((Coordinate x21 _), (Coordinate x22 _)) = l2
 
--- a function which parses input into Directions
-parseWire ::  [String] -> [Direction]
-parseWire strings = 
-    [ parse x | x <- strings]
-    where 
-        parse ('L':ints) = West  (read ints :: Int)
-        parse ('R':ints) = East  (read ints :: Int)
-        parse ('D':ints) = South (read ints :: Int)
-        parse ('U':ints) = North (read ints :: Int)
+getSegmentIntersection :: Line -> Line -> Maybe Coordinate
+getSegmentIntersection l1 l2 =
+    case (hIntersection, vIntersection) of
+        (Just x, Just y) -> Just $ Coordinate x y
+        _ -> Nothing
+    where
+        hIntersection = getHOverlap l1 l2
+        vIntersection = getVOverlap l1 l2
+
+
+getAllIntersections :: [Line] -> [Line] -> [Coordinate]
+getAllIntersections w1 w2 =
+    catMaybes $ [ getSegmentIntersection s1 s2 | s1 <- w1, s2 <- w2 ]
+
+coordinateToManhattanDistance :: Coordinate -> Int
+coordinateToManhattanDistance (Coordinate x y) = (abs x) + (abs y)
 
 main = do
     (filename:_) <- getArgs
     contents <- readFile filename
     let wireStrings = filter (\wire -> wire /= "") $ splitOn "\n" contents
     let wireDirections = map (\string -> splitOn "," string) wireStrings
-    let wires = [ parseWire wire | wire <- wireDirections ]
-    print $ getBounds $ head $ drop 1 wires
-
--- drawWires :: [Direction] -> String
+    let (w1:w2:_) = map (coordinatesToSegments . directionsToCoordinates) wireDirections
+    let intersections = getAllIntersections w1 w2
+    let distance = map coordinateToManhattanDistance intersections
+    let minDistance = minElement distance
+    print minDistance
